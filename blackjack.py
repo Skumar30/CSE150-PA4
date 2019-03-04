@@ -6,6 +6,7 @@ import numpy as np
 from statistics import mean
 import random
 import pdb
+
 def genCard(cList, xList):
     #Generate and remove an card from cList and append it to xList.
     #Return the card, and whether the card is an Ace
@@ -106,7 +107,8 @@ def simulation_sequence(policy, state, userCard, dealCard, ccards):
                         dealSum -= 10
         state = make_state(userSum, userA, dealFirst, dealAFirst)
 
-def simulate_one_step(state, action, userCard, dealCard, ccards, stand):
+#create next state in simulation
+def simulate_one_step(state, action, userCard, dealCard, ccards):
     episode = []
     userSum = state[0]
     userA = state[1]
@@ -118,13 +120,11 @@ def simulate_one_step(state, action, userCard, dealCard, ccards, stand):
     gameover = False
     reward = 0
 
-    #check for no next state, i.e. at a terminal state. return null if game is over
-    if stand == 1: #used only for Q learning to prevent standing forever creating new states
-        return None
+    #check for no next state, i.e. at a terminal state. set gameover to true
     if (userSum >= 21 and userA == 0) or len(userCard) == 5:
-        return None
+        gameover = True
     if len(userCard) == 2 and userSum == 21:
-        return None
+        gameover = True
 
     #draw a card if hitting
     if action == 0:
@@ -136,6 +136,7 @@ def simulate_one_step(state, action, userCard, dealCard, ccards, stand):
             userSum -= 10
 
     if action == 1 or len(userCard) == 5: #user stands, hit for dealer
+        gameover = True
         while dealSum <= userSum and dealSum < 17:
             card, cA = genCard(ccards, dealCard)
             dealA += cA
@@ -144,34 +145,31 @@ def simulate_one_step(state, action, userCard, dealCard, ccards, stand):
                 dealA -= 1
                 dealSum -= 10
 
-    #update gameover
-    if (userSum >= 21 and userA == 0) or len(userCard) == 5:
-        gameover = True
 
-    if len(userCard) == 2 and userSum == 21:
-        gameover = True
     #reward calculation
-
-    if not (gameover or stand):
+    if not (gameover or stand): #non-terminal state
         reward = 0
-    #tie situation
+
+
     else:
-        if userSum == dealSum:
+        if userSum == dealSum: #tie
             reward = 0
-        elif userSum <= 21 and len(userCard) == 5:
+        elif userSum <= 21 and len(userCard) == 5: #user hit 5 cards within 21
             reward = 1
-        elif userSum <= 21 and dealSum < userSum or dealSum > 21:
+        elif userSum <= 21 and dealSum < userSum or dealSum > 21: # user won/dealer bust
             reward = 1
-        else:
+        else: #user lost
             reward = -1
 
+    if gameover: #at terminal, next node is null
+        return (None, reward)
+    #create next state if game not over
     next_state = make_state(userSum, userA, dealFirst, dealAFirst)
     return (next_state, reward)
 
 
 def reward_to_go(s, gamma, episode):
-    # Placeholder, need to implement the right calculation
-    # notes: episode is a list, use last    index and subtract from current index to find dist
+    #episode is a list, use last index and subtract from current index to find dist
     dist = episode.index(episode[-1]) - episode.index(s)
     val = episode[-1][1] * (gamma ** dist)
     return val
@@ -189,9 +187,8 @@ def MC_Policy_Evaluation(policy, states, gamma, MCvalues, G):
         episode = simulation_sequence(policy, state, userCard, dealCard, ccards)
         # update
         for e in episode:
-            #This line is a placeholder. Remove. Need more lines too, of course.
-            #MCvalues[e[0]] += 0.001
 
+            #add new reward to list and average
             G[e[0]].append(reward_to_go(e, gamma, episode))
             MCvalues[e[0]] = mean(G[e[0]])
 
@@ -208,18 +205,17 @@ def TD_Policy_Evaluation(policy, states, gamma, TDvalues, NTD):
         # do simulation
         episode = simulation_sequence(policy, state, userCard, dealCard, ccards)
 
-        curr_state = episode[0]
-        while curr_state is not None:
-            next_s= simulate_one_step(curr_state[0], policy(curr_state[1]), userCard, dealCard, ccards, 0)
-            alpha = float(10) / float(9 + NTD[curr_state[0]])
-            NTD[curr_state[0]] += 1
-            if next_s is not None:
-                # U(s) = U(s) + alpha*(R(s) + gamma * U(next_s) - U(s))
-                #val = TDvalues.get(next_s[0], 0)
+        curr_state = episode[0] #current state and reward
+        while not(curr_state[0] == None): #valid state
+            next_s= simulate_one_step(curr_state[0], policy(curr_state[1]), userCard, dealCard, ccards) #find next state
+            alpha = float(10) / float(9 + NTD[curr_state[0]]) #calc alpha val
+            NTD[curr_state[0]] += 1 #increment visit
+            if not(next_s[0] == None):
+                #calculate new TDvalue using next_s
                 val = TDvalues[next_s[0]]
                 TDvalues[curr_state[0]] = TDvalues[curr_state[0]] + (alpha * (curr_state[1] + (gamma * val) - TDvalues[curr_state[0]]))
             else:
-                TDvalues[curr_state[0]] = TDvalues[curr_state[0]] + (alpha * (curr_state[1] + 0 - TDvalues[curr_state[0]]))
+                TDvalues[curr_state[0]] = TDvalues[curr_state[0]] + (alpha * (next_s[1] + 0 - TDvalues[curr_state[0]]))
             curr_state = next_s
             #def simulate_one_step(state, action, userCard, dealCard, ccards, stand)
 
@@ -239,23 +235,19 @@ def Q_Learning(states, gamma, Qvalues, NQ):
         curr_state = episode[0]
         eps = 0.10
         stand = 0
-        while curr_state is not None:
+        while not(curr_state[0] == None):
             action = pick_action(curr_state[0], eps, Qvalues)
-            next_s= simulate_one_step(curr_state[0], action, userCard, dealCard, ccards, stand)
+            next_s= simulate_one_step(curr_state[0], action, userCard, dealCard, ccards)
             alpha = float(10) / (9 + NQ[curr_state[0]])
             NQ[curr_state[0]] += 1
-            if next_s is not None:
+            if not(next_s[0] == None):
 
                 #use max utility from next state
                 val = max(Qvalues[next_s[0]][0], Qvalues[next_s[0]][1])
                 new_val= Qvalues[curr_state[0]][action] + (alpha * (curr_state[1] + (gamma * val) - Qvalues[curr_state[0]][action]))
                 Qvalues[curr_state[0]][action] = new_val
             else:
-                Qvalues[curr_state[0]][action] = Qvalues[curr_state[0]][action] + (alpha * (curr_state[1] + 0 - Qvalues[curr_state[0]][action]))
-            if next_s is not None and curr_state[0] == next_s[0]:
-                stand = 1
-            else:
-                stand = 0
+                Qvalues[curr_state[0]][action] = Qvalues[curr_state[0]][action] + (alpha * (next_s[1] + 0 - Qvalues[curr_state[0]][action]))
             curr_state = next_s
 
 #pick action for Q-Learning
