@@ -3,7 +3,9 @@ from pygame.locals import *
 from cards import *
 import time
 import numpy as np
-
+from statistics import mean
+import random
+import pdb
 def genCard(cList, xList):
     #Generate and remove an card from cList and append it to xList.
     #Return the card, and whether the card is an Ace
@@ -34,12 +36,12 @@ def initGame(cList, uList, dList):
 
 def make_state(userSum, userA, dealFirst, dealAFirst):
     #Eliminate duplicated bust cases
-    if userSum > 21: 
+    if userSum > 21:
         userSum = 22
     #userSum: sum of user's cards
     #userA: number of user's Aces
     #dealFirst: value of dealer's first card
-    #dealAFirst: whether dealer's first card is Ace   
+    #dealAFirst: whether dealer's first card is Ace
     return (userSum, userA, dealFirst, dealAFirst)
 
 def policy(userSum):
@@ -105,12 +107,74 @@ def simulation_sequence(policy, state, userCard, dealCard, ccards):
         state = make_state(userSum, userA, dealFirst, dealAFirst)
 
 def simulate_one_step(state, action, userCard, dealCard, ccards, stand):
-    #Need to implement this for TD and QL
-    pass
+    episode = []
+    userSum = state[0]
+    userA = state[1]
+    dealSum = state[2]
+    dealA = state[3]
+    dealFirst = state[2]
+    dealAFirst = state[3]
+    stand = action
+    gameover = False
+    reward = 0
+
+    #check for no next state, i.e. at a terminal state. return null if game is over
+    if stand == 1: #used only for Q learning to prevent standing forever creating new states
+        return None
+    if (userSum >= 21 and userA == 0) or len(userCard) == 5:
+        return None
+    if len(userCard) == 2 and userSum == 21:
+        return None
+
+    #draw a card if hitting
+    if action == 0:
+        card, cA = genCard(ccards, userCard)
+        userA += cA
+        userSum += getAmt(card)
+        while userSum > 21 and userA > 0:
+            userA -= 1
+            userSum -= 10
+
+    if action == 1 or len(userCard) == 5: #user stands, hit for dealer
+        while dealSum <= userSum and dealSum < 17:
+            card, cA = genCard(ccards, dealCard)
+            dealA += cA
+            dealSum += getAmt(card)
+            while dealSum > 21 and dealA > 0:
+                dealA -= 1
+                dealSum -= 10
+
+    #update gameover
+    if (userSum >= 21 and userA == 0) or len(userCard) == 5:
+        gameover = True
+
+    if len(userCard) == 2 and userSum == 21:
+        gameover = True
+    #reward calculation
+
+    if not (gameover or stand):
+        reward = 0
+    #tie situation
+    else:
+        if userSum == dealSum:
+            reward = 0
+        elif userSum <= 21 and len(userCard) == 5:
+            reward = 1
+        elif userSum <= 21 and dealSum < userSum or dealSum > 21:
+            reward = 1
+        else:
+            reward = -1
+
+    next_state = make_state(userSum, userA, dealFirst, dealAFirst)
+    return (next_state, reward)
+
 
 def reward_to_go(s, gamma, episode):
     # Placeholder, need to implement the right calculation
-    return 0
+    # notes: episode is a list, use last    index and subtract from current index to find dist
+    dist = episode.index(episode[-1]) - episode.index(s)
+    val = episode[-1][1] * (gamma ** dist)
+    return val
 
 def MC_Policy_Evaluation(policy, states, gamma, MCvalues, G):
     #Perform 50 simulations in each cycle in each game loop (so total number of simulations increases quickly)
@@ -125,15 +189,84 @@ def MC_Policy_Evaluation(policy, states, gamma, MCvalues, G):
         episode = simulation_sequence(policy, state, userCard, dealCard, ccards)
         # update
         for e in episode:
-            #This line is a placeholder. Remove. Need more lines too, of course. 
-            MCvalues[e[0]] += 0.001
+            #This line is a placeholder. Remove. Need more lines too, of course.
+            #MCvalues[e[0]] += 0.001
+
+            G[e[0]].append(reward_to_go(e, gamma, episode))
+            MCvalues[e[0]] = mean(G[e[0]])
+
 
 def TD_Policy_Evaluation(policy, states, gamma, TDvalues, NTD):
-    pass
+
+    for simulation in range(50):
+        # generate random game
+        userCard = []
+        dealCard = []
+        ccards = copy.copy(cards)
+        userSum, userA, dealSum, dealA, dealFirst, dealAFirst = initGame(ccards, userCard, dealCard)
+        state = make_state(userSum, userA, dealFirst, dealAFirst)
+        # do simulation
+        episode = simulation_sequence(policy, state, userCard, dealCard, ccards)
+
+        curr_state = episode[0]
+        while curr_state is not None:
+            next_s= simulate_one_step(curr_state[0], policy(curr_state[1]), userCard, dealCard, ccards, 0)
+            alpha = float(10) / float(9 + NTD[curr_state[0]])
+            NTD[curr_state[0]] += 1
+            if next_s is not None:
+                # U(s) = U(s) + alpha*(R(s) + gamma * U(next_s) - U(s))
+                #val = TDvalues.get(next_s[0], 0)
+                val = TDvalues[next_s[0]]
+                TDvalues[curr_state[0]] = TDvalues[curr_state[0]] + (alpha * (curr_state[1] + (gamma * val) - TDvalues[curr_state[0]]))
+            else:
+                TDvalues[curr_state[0]] = TDvalues[curr_state[0]] + (alpha * (curr_state[1] + 0 - TDvalues[curr_state[0]]))
+            curr_state = next_s
+            #def simulate_one_step(state, action, userCard, dealCard, ccards, stand)
+
 
 def Q_Learning(states, gamma, Qvalues, NQ):
-    pass
+    for simulation in range(50):
+        # generate random game
+        userCard = []
+        dealCard = []
+        ccards = copy.copy(cards)
 
+        userSum, userA, dealSum, dealA, dealFirst, dealAFirst = initGame(ccards, userCard, dealCard)
+        state = make_state(userSum, userA, dealFirst, dealAFirst)
+        # do simulation
+        episode = simulation_sequence(policy, state, userCard, dealCard, ccards)
+
+        curr_state = episode[0]
+        eps = 0.10
+        stand = 0
+        while curr_state is not None:
+            action = pick_action(curr_state[0], eps, Qvalues)
+            next_s= simulate_one_step(curr_state[0], action, userCard, dealCard, ccards, stand)
+            alpha = float(10) / (9 + NQ[curr_state[0]])
+            NQ[curr_state[0]] += 1
+            if next_s is not None:
+
+                #use max utility from next state
+                val = max(Qvalues[next_s[0]][0], Qvalues[next_s[0]][1])
+                new_val= Qvalues[curr_state[0]][action] + (alpha * (curr_state[1] + (gamma * val) - Qvalues[curr_state[0]][action]))
+                Qvalues[curr_state[0]][action] = new_val
+            else:
+                Qvalues[curr_state[0]][action] = Qvalues[curr_state[0]][action] + (alpha * (curr_state[1] + 0 - Qvalues[curr_state[0]][action]))
+            if next_s is not None and curr_state[0] == next_s[0]:
+                stand = 1
+            else:
+                stand = 0
+            curr_state = next_s
+
+#pick action for Q-Learning
+def pick_action (s, eps, Qvalues):
+    if random.random() < eps:
+        return random.randint(0,1) #returns 0 or 1
+    else:
+        if Qvalues[s][0] < Qvalues[s][1]: #hitting is the max arg
+            return 1
+        else: #better to stand
+            return 0
 def main():
     ccards = copy.copy(cards)
     stand = False
@@ -163,10 +296,10 @@ def main():
     Qvalues = {}
     NQ = {}
     #Initialization of the values
-    #i iterates through the sum of user's cards. It is set to 22 if the user went bust. 
-    #j iterates through the value of the dealer's first card. Ace is eleven. 
+    #i iterates through the sum of user's cards. It is set to 22 if the user went bust.
+    #j iterates through the value of the dealer's first card. Ace is eleven.
     #a1 is the number of Aces that the user has.
-    #a2 denotes whether the dealer's first card is Ace. 
+    #a2 denotes whether the dealer's first card is Ace.
     states = []
     for i in range(2,23):
         for j in range(2,12):
@@ -186,7 +319,7 @@ def main():
     #userSum: sum of user's cards
     #userA: number of user's Aces
     #dealSum: sum of dealer's cards (including hidden one)
-    #dealA: number of all dealer's Aces, 
+    #dealA: number of all dealer's Aces,
     #dealFirst: value of dealer's first card
     #dealAFirst: whether dealer's first card is Ace
     userSum, userA, dealSum, dealA, dealFirst, dealAFirst = initGame(ccards, userCard, dealCard)
@@ -277,7 +410,7 @@ def main():
                         while dealSum > 21 and dealA > 0:
                             dealA -= 1
                             dealSum -= 10
-            
+
         for event in pygame.event.get():
             if event.type == QUIT:
                 pygame.quit()
@@ -360,4 +493,3 @@ def main():
 
 if __name__ == '__main__':
     main()
-
